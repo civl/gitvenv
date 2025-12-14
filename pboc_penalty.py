@@ -16,6 +16,7 @@ PROVINCE_SITES = [
     {"province": "海南省", "base_url": "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"},
     {"province": "山东省", "base_url": "https://jinan.pbc.gov.cn/jinan/120967/120985/120994/index.html"},
     {"province": "北京市", "base_url": "https://beijing.pbc.gov.cn/beijing/132030/132052/132059/index.html"},
+    {"province": "天津市", "base_url": "https://tianjin.pbc.gov.cn/fzhtianjin/113682/113700/113707/index.html"},
 ]
 
 FILE_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".et", ".zip", ".rar")
@@ -212,11 +213,10 @@ def get_all_data(force=False):
                 if not html:
                     continue
                 soup = BeautifulSoup(html, "lxml")
-                if "beijing.pbc.gov.cn" in page:
-                    right = soup.find("td", id="content_right", class_="content_right")
-                    if not right:
-                        right = soup.find("td", id="content_right")
+                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                    right = soup.find("td", id="content_right")
                     if right:
+                        seen_hrefs = set()
                         tables = right.find_all("table", attrs={"width": "90%"})
                         header_found = False
                         for tbl in tables:
@@ -240,8 +240,29 @@ def get_all_data(force=False):
                                     break
                             if link_td_index >= 0 and link_td_index + 1 < len(tds):
                                 date_text = tds[link_td_index + 1].get_text(strip=True)
-                            if href and name:
-                                records.append({"province": province, "branch": "北京市分行", "title": name, "url": href, "date": date_text})
+                            if href and name and (href not in seen_hrefs):
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                seen_hrefs.add(href)
+                        uls = right.find_all("ul")
+                        for ul in uls:
+                            for li in ul.find_all("li"):
+                                a = li.find("a", href=True)
+                                if not a:
+                                    continue
+                                name = a.get("title") or a.get_text(strip=True)
+                                href = normalize_href(page, a.get("href"))
+                                if not href or href in seen_hrefs:
+                                    continue
+                                ds = li.find("span", class_="date")
+                                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                if not date_text:
+                                    m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
+                                    if m:
+                                        date_text = m.group(0)
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                seen_hrefs.add(href)
                 else:
                     containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
                     for cont in containers:
@@ -282,11 +303,10 @@ def _async_fetch_all():
                 html = fetch(page)
                 if html:
                     soup = BeautifulSoup(html, "lxml")
-                    if "beijing.pbc.gov.cn" in page:
-                        right = soup.find("td", id="content_right", class_="content_right")
-                        if not right:
-                            right = soup.find("td", id="content_right")
+                    if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                        right = soup.find("td", id="content_right")
                         if right:
+                            seen_hrefs = set()
                             tables = right.find_all("table", attrs={"width": "90%"})
                             header_found = False
                             for tbl in tables:
@@ -310,8 +330,29 @@ def _async_fetch_all():
                                         break
                                 if link_td_index >= 0 and link_td_index + 1 < len(tds):
                                     date_text = tds[link_td_index + 1].get_text(strip=True)
-                                if href and name:
-                                    records.append({"province": prov, "branch": "北京市分行", "title": name, "url": href, "date": date_text})
+                                if href and name and (href not in seen_hrefs):
+                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                    records.append({"province": prov, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                    seen_hrefs.add(href)
+                            uls = right.find_all("ul")
+                            for ul in uls:
+                                for li in ul.find_all("li"):
+                                    a = li.find("a", href=True)
+                                    if not a:
+                                        continue
+                                    name = a.get("title") or a.get_text(strip=True)
+                                    href = normalize_href(page, a.get("href"))
+                                    if not href or href in seen_hrefs:
+                                        continue
+                                    ds = li.find("span", class_="date")
+                                    date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                    if not date_text:
+                                        m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
+                                        if m:
+                                            date_text = m.group(0)
+                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                    records.append({"province": prov, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                    seen_hrefs.add(href)
                     else:
                         containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
                         for cont in containers:
@@ -341,6 +382,107 @@ def _async_fetch_all():
     except Exception as e:
         PROGRESS["status"] = "error"
         PROGRESS["message"] = str(e)
+def _async_fetch_one(province):
+    try:
+        target = None
+        for s in PROVINCE_SITES:
+            if s["province"] == province:
+                target = s
+                break
+        if not target:
+            PROGRESS["status"] = "error"
+            PROGRESS["message"] = "未知省份"
+            return
+        PROGRESS["status"] = "running"
+        pages = list_pages(target["base_url"], max_pages=50)
+        PROGRESS["total"] = len(pages)
+        PROGRESS["current"] = 0
+        new_records = []
+        for page in pages:
+            html = fetch(page)
+            if html:
+                soup = BeautifulSoup(html, "lxml")
+                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                    right = soup.find("td", id="content_right")
+                    if right:
+                        seen_hrefs = set()
+                        tables = right.find_all("table", attrs={"width": "90%"})
+                        header_found = False
+                        for tbl in tables:
+                            ths = [td.get_text(strip=True) for td in tbl.find_all("td")]
+                            if ("公开信息名称" in ths) and ("生成日期" in ths):
+                                header_found = True
+                                continue
+                            if not header_found:
+                                continue
+                            a = tbl.find("a", href=True)
+                            if not a:
+                                continue
+                            name = a.get("title") or a.get_text(strip=True)
+                            href = normalize_href(page, a.get("href"))
+                            tds = tbl.find_all("td")
+                            date_text = ""
+                            link_td_index = -1
+                            for i, td in enumerate(tds):
+                                if td.find("a", href=True):
+                                    link_td_index = i
+                                    break
+                            if link_td_index >= 0 and (link_td_index + 1) < len(tds):
+                                date_text = tds[link_td_index + 1].get_text(strip=True)
+                            if href and name and (href not in seen_hrefs):
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                new_records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                seen_hrefs.add(href)
+                        uls = right.find_all("ul")
+                        for ul in uls:
+                            for li in ul.find_all("li"):
+                                a = li.find("a", href=True)
+                                if not a:
+                                    continue
+                                name = a.get("title") or a.get_text(strip=True)
+                                href = normalize_href(page, a.get("href"))
+                                if not href or href in seen_hrefs:
+                                    continue
+                                ds = li.find("span", class_="date")
+                                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                if not date_text:
+                                    m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
+                                    if m:
+                                        date_text = m.group(0)
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                new_records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
+                                seen_hrefs.add(href)
+                else:
+                    containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
+                    for cont in containers:
+                        title_span = cont.find("span", class_="portlettitle2")
+                        title_text = title_span.get_text(strip=True) if title_span else ""
+                        branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
+                        uls = cont.select("ul.txtlist")
+                        for ul in uls:
+                            for li in ul.find_all("li"):
+                                a = li.find("a", href=True)
+                                if not a:
+                                    continue
+                                name = a.get("title") or a.get_text(strip=True)
+                                href = normalize_href(page, a.get("href"))
+                                ds = li.find("span", class_="date")
+                                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                new_records.append({"province": province, "branch": branch, "title": name, "url": href, "date": date_text})
+            PROGRESS["current"] += 1
+        PROGRESS["message"] = "解析完成，开始获取附件"
+        PROGRESS["total"] = PROGRESS["current"] + len(new_records)
+        for it in new_records:
+            it["attachments"] = collect_attachments(it["url"])
+            PROGRESS["current"] += 1
+        old = CACHE.get("records") or []
+        others = [x for x in old if x.get("province") != province]
+        CACHE["records"] = others + new_records
+        PROGRESS["status"] = "done"
+        PROGRESS["message"] = "完成"
+    except Exception as e:
+        PROGRESS["status"] = "error"
+        PROGRESS["message"] = str(e)
 INDEX_TMPL = """
 <!doctype html>
 <html lang="zh-CN">
@@ -349,11 +491,9 @@ INDEX_TMPL = """
     <title>行政处罚文件汇总</title>
     <style>
       body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 20px; }
-      .top { display:flex; justify-content: space-between; align-items:center; margin-bottom:12px; }
+      .top { display:flex; justify-content: flex-start; align-items:center; margin-bottom:12px; }
       .note { color:#666; font-size:12px; }
       .filters { margin: 8px 0 16px; }
-      .filters a { margin-right: 8px; text-decoration:none; }
-      .filters .active { font-weight: 600; }
       table { width: 100%; border-collapse: collapse; }
       th, td { border: 1px solid #ddd; padding: 8px; }
       th { background: #f6f6f6; text-align: left; }
@@ -363,17 +503,33 @@ INDEX_TMPL = """
       .progress { width:240px; height:10px; background:#eee; border-radius:5px; overflow:hidden; display:inline-block; vertical-align:middle; }
       .bar { height:100%; width:0%; background:#0a4792; transition: width .2s ease; }
       select { padding:4px; }
+      .range-buttons { display:inline-flex; gap:0; }
+      .range-buttons button { margin:0; padding:4px 10px; }
     </style>
   </head>
   <body>
     <div class="top">
       <div><strong>中国人民银行各省行政处罚</strong></div>
+      <div style="margin-left:3ch;">
+        <label>选择省份：</label>
+        <select id="provFetchSel">
+          <option value="">全部</option>
+          {% for p in site_provinces %}
+            <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+        <button id="btnFetchOne">获取数据</button>
+        <div class="progress"><div class="bar" id="bar"></div></div>
+        <span id="progText"></span>
+      </div>
     </div>
     <div class="toolbar">
-      <button id="btnFetch">手工拉取数据</button>
-      <div class="progress"><div class="bar" id="bar"></div></div>
-      <span id="progText"></span>
-      <label>筛选省份：</label>
+      <div class="range-buttons">
+        <button id="btnRangeMonth" {% if range_key == 'month' %}disabled{% endif %}>近一月</button>
+        <button id="btnRangeYear" {% if range_key == 'year' %}disabled{% endif %}>近一年</button>
+        <button id="btnRangeAll" {% if range_key == 'all' %}disabled{% endif %}>全部</button>
+      </div>
+      <label style="margin-left:3ch;">筛选省份：</label>
       <select id="provSel">
         <option value="">全部</option>
         {% for p in provinces %}
@@ -387,11 +543,6 @@ INDEX_TMPL = """
           <option value="{{ k }}" {% if k == keyword_filter %}selected{% endif %}>{{ k }}</option>
         {% endfor %}
       </select>
-    </div>
-    <div class="filters">
-      <a href="?range=month" class="{{ 'active' if range_key == 'month' else '' }}">近一月</a>
-      <a href="?range=year" class="{{ 'active' if range_key == 'year' else '' }}">近一年</a>
-      <a href="?range=all" class="{{ 'active' if range_key == 'all' else '' }}">全部</a>
     </div>
     {% if rows %}
       <table>
@@ -428,35 +579,15 @@ INDEX_TMPL = """
       <p class="empty">暂无数据</p>
     {% endif %}
     <script>
-      const btn = document.getElementById('btnFetch');
       const bar = document.getElementById('bar');
       const txt = document.getElementById('progText');
       const sel = document.getElementById('provSel');
       const kwSel = document.getElementById('kwSel');
-      btn.onclick = async () => {
-        btn.disabled = true;
-        txt.textContent = '';
-        bar.style.width = '0%';
-        try {
-          await fetch('/api/fetch_start', {method:'POST'});
-          const t = setInterval(async () => {
-            const r = await fetch('/api/fetch_status');
-            const j = await r.json();
-            const total = j.total || 0;
-            const cur = j.current || 0;
-            const pct = total ? Math.floor(cur * 100 / total) : 0;
-            bar.style.width = pct + '%';
-            txt.textContent = (j.status || '') + ' ' + cur + '/' + total + ' ' + (j.message || '');
-            if (j.status === 'done' || j.status === 'error') {
-              clearInterval(t);
-              btn.disabled = false;
-              location.href = location.pathname + '?range={{ range_key }}' + '{{ "&province=" + province_filter if province_filter else "" }}' + '{{ "&keyword=" + keyword_filter if keyword_filter else "" }}';
-            }
-          }, 800);
-        } catch(e) {
-          btn.disabled = false;
-        }
-      };
+      const selFetch = document.getElementById('provFetchSel');
+      const btnOne = document.getElementById('btnFetchOne');
+      const btnRangeMonth = document.getElementById('btnRangeMonth');
+      const btnRangeYear = document.getElementById('btnRangeYear');
+      const btnRangeAll = document.getElementById('btnRangeAll');
       sel.onchange = () => {
         const p = sel.value;
         const q = new URLSearchParams(window.location.search);
@@ -467,6 +598,56 @@ INDEX_TMPL = """
         const k = kwSel.value;
         const q = new URLSearchParams(window.location.search);
         if (k) q.set('keyword', k); else q.delete('keyword');
+        window.location.search = q.toString();
+      };
+      btnOne.onclick = async () => {
+        const p = selFetch.value;
+        btnOne.disabled = true;
+        txt.textContent = '';
+        bar.style.width = '0%';
+        try {
+          if (!p || p === '' || p === '全部') {
+            await fetch('/api/fetch_start', {method:'POST'});
+          } else {
+            await fetch('/api/fetch_start_one?province=' + encodeURIComponent(p), {method:'POST'});
+          }
+          const t = setInterval(async () => {
+            const r = await fetch('/api/fetch_status');
+            const j = await r.json();
+            const total = j.total || 0;
+            const cur = j.current || 0;
+            const pct = total ? Math.floor(cur * 100 / total) : 0;
+            bar.style.width = pct + '%';
+            txt.textContent = (j.status || '') + ' ' + cur + '/' + total + ' ' + (j.message || '');
+            if (j.status === 'done' || j.status === 'error') {
+              clearInterval(t);
+              btnOne.disabled = false;
+              const q = new URLSearchParams(window.location.search);
+              if (p && p !== '' && p !== '全部') {
+                q.set('province', p);
+              } else {
+                q.delete('province');
+              }
+              window.location.search = q.toString();
+            }
+          }, 800);
+        } catch(e) {
+          btnOne.disabled = false;
+        }
+      };
+      btnRangeMonth.onclick = () => {
+        const q = new URLSearchParams(window.location.search);
+        q.set('range', 'month');
+        window.location.search = q.toString();
+      };
+      btnRangeYear.onclick = () => {
+        const q = new URLSearchParams(window.location.search);
+        q.set('range', 'year');
+        window.location.search = q.toString();
+      };
+      btnRangeAll.onclick = () => {
+        const q = new URLSearchParams(window.location.search);
+        q.set('range', 'all');
         window.location.search = q.toString();
       };
     </script>
@@ -500,6 +681,7 @@ def index():
         rows=rows,
         range_key=range_key,
         provinces=sorted({x.get("province") for x in records}),
+        site_provinces=[s["province"] for s in PROVINCE_SITES],
         keywords=sorted({k for k in KEY_WORDS if any(k in (x.get("title") or "") for x in records)}),
         keyword_filter=keyword_filter,
         province_filter=province_filter,
@@ -520,6 +702,17 @@ def fetch_status():
         "total": PROGRESS.get("total"),
         "message": PROGRESS.get("message"),
     }
+@app.route("/api/fetch_start_one", methods=["POST"])
+def fetch_start_one():
+    import threading
+    if PROGRESS["status"] == "running":
+        return {"status": "running"}
+    prov = request.args.get("province") or (request.json or {}).get("province") or request.form.get("province")
+    if not prov:
+        return {"status": "error", "message": "缺少省份"}
+    t = threading.Thread(target=_async_fetch_one, args=(prov,), daemon=True)
+    t.start()
+    return {"status": "started"}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
