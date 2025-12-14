@@ -15,6 +15,7 @@ KEY_WORDS = ["支付宝", "财付通", "拉卡拉", "快钱", "新生", "钱宝"
 PROVINCE_SITES = [
     {"province": "海南省", "base_url": "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"},
     {"province": "山东省", "base_url": "https://jinan.pbc.gov.cn/jinan/120967/120985/120994/index.html"},
+    {"province": "北京市", "base_url": "https://beijing.pbc.gov.cn/beijing/132030/132052/132059/index.html"},
 ]
 
 FILE_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".et", ".zip", ".rar")
@@ -211,23 +212,54 @@ def get_all_data(force=False):
                 if not html:
                     continue
                 soup = BeautifulSoup(html, "lxml")
-                containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
-                for cont in containers:
-                    title_span = cont.find("span", class_="portlettitle2")
-                    title_text = title_span.get_text(strip=True) if title_span else ""
-                    branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
-                    uls = cont.select("ul.txtlist")
-                    for ul in uls:
-                        for li in ul.find_all("li"):
-                            a = li.find("a", href=True)
+                if "beijing.pbc.gov.cn" in page:
+                    right = soup.find("td", id="content_right", class_="content_right")
+                    if not right:
+                        right = soup.find("td", id="content_right")
+                    if right:
+                        tables = right.find_all("table", attrs={"width": "90%"})
+                        header_found = False
+                        for tbl in tables:
+                            ths = [td.get_text(strip=True) for td in tbl.find_all("td")]
+                            if ("公开信息名称" in ths) and ("生成日期" in ths):
+                                header_found = True
+                                continue
+                            if not header_found:
+                                continue
+                            a = tbl.find("a", href=True)
                             if not a:
                                 continue
                             name = a.get("title") or a.get_text(strip=True)
                             href = normalize_href(page, a.get("href"))
-                            ds = li.find("span", class_="date")
-                            date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-                            item = {"province": province, "branch": branch, "title": name, "url": href, "date": date_text}
-                            records.append(item)
+                            tds = tbl.find_all("td")
+                            date_text = ""
+                            link_td_index = -1
+                            for i, td in enumerate(tds):
+                                if td.find("a", href=True):
+                                    link_td_index = i
+                                    break
+                            if link_td_index >= 0 and link_td_index + 1 < len(tds):
+                                date_text = tds[link_td_index + 1].get_text(strip=True)
+                            if href and name:
+                                records.append({"province": province, "branch": "北京市分行", "title": name, "url": href, "date": date_text})
+                else:
+                    containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
+                    for cont in containers:
+                        title_span = cont.find("span", class_="portlettitle2")
+                        title_text = title_span.get_text(strip=True) if title_span else ""
+                        branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
+                        uls = cont.select("ul.txtlist")
+                        for ul in uls:
+                            for li in ul.find_all("li"):
+                                a = li.find("a", href=True)
+                                if not a:
+                                    continue
+                                name = a.get("title") or a.get_text(strip=True)
+                                href = normalize_href(page, a.get("href"))
+                                ds = li.find("span", class_="date")
+                                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                item = {"province": province, "branch": branch, "title": name, "url": href, "date": date_text}
+                                records.append(item)
         for it in records:
             it["attachments"] = collect_attachments(it["url"])
         CACHE["records"] = records
@@ -250,22 +282,53 @@ def _async_fetch_all():
                 html = fetch(page)
                 if html:
                     soup = BeautifulSoup(html, "lxml")
-                    containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
-                    for cont in containers:
-                        title_span = cont.find("span", class_="portlettitle2")
-                        title_text = title_span.get_text(strip=True) if title_span else ""
-                        branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
-                        uls = cont.select("ul.txtlist")
-                        for ul in uls:
-                            for li in ul.find_all("li"):
-                                a = li.find("a", href=True)
+                    if "beijing.pbc.gov.cn" in page:
+                        right = soup.find("td", id="content_right", class_="content_right")
+                        if not right:
+                            right = soup.find("td", id="content_right")
+                        if right:
+                            tables = right.find_all("table", attrs={"width": "90%"})
+                            header_found = False
+                            for tbl in tables:
+                                ths = [td.get_text(strip=True) for td in tbl.find_all("td")]
+                                if ("公开信息名称" in ths) and ("生成日期" in ths):
+                                    header_found = True
+                                    continue
+                                if not header_found:
+                                    continue
+                                a = tbl.find("a", href=True)
                                 if not a:
                                     continue
                                 name = a.get("title") or a.get_text(strip=True)
                                 href = normalize_href(page, a.get("href"))
-                                ds = li.find("span", class_="date")
-                                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-                                records.append({"province": prov, "branch": branch, "title": name, "url": href, "date": date_text})
+                                tds = tbl.find_all("td")
+                                date_text = ""
+                                link_td_index = -1
+                                for i, td in enumerate(tds):
+                                    if td.find("a", href=True):
+                                        link_td_index = i
+                                        break
+                                if link_td_index >= 0 and link_td_index + 1 < len(tds):
+                                    date_text = tds[link_td_index + 1].get_text(strip=True)
+                                if href and name:
+                                    records.append({"province": prov, "branch": "北京市分行", "title": name, "url": href, "date": date_text})
+                    else:
+                        containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
+                        for cont in containers:
+                            title_span = cont.find("span", class_="portlettitle2")
+                            title_text = title_span.get_text(strip=True) if title_span else ""
+                            branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
+                            uls = cont.select("ul.txtlist")
+                            for ul in uls:
+                                for li in ul.find_all("li"):
+                                    a = li.find("a", href=True)
+                                    if not a:
+                                        continue
+                                    name = a.get("title") or a.get_text(strip=True)
+                                    href = normalize_href(page, a.get("href"))
+                                    ds = li.find("span", class_="date")
+                                    date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+                                    records.append({"province": prov, "branch": branch, "title": name, "url": href, "date": date_text})
                 PROGRESS["current"] += 1
         PROGRESS["message"] = "解析完成，开始获取附件"
         PROGRESS["total"] = PROGRESS["current"] + len(records)
