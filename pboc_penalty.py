@@ -334,6 +334,7 @@ INDEX_TMPL = """
       <table>
         <thead>
           <tr>
+            <th>序号</th>
             <th>省份</th>
             <th>分行名称</th>
             <th>处罚文件名称</th>
@@ -344,6 +345,7 @@ INDEX_TMPL = """
         <tbody>
           {% for r in rows %}
           <tr>
+            <td>{{ loop.index }}</td>
             <td>{{ r.province }}</td>
             <td>{{ r.branch }}</td>
             <td><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.name }}</a></td>
