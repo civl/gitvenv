@@ -12,12 +12,8 @@ HEADERS = {
 }
 KEY_WORDS = ["支付宝", "财付通", "拉卡拉", "快钱", "新生", "钱宝"]
 
-PROV_INDEX = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/5485279/index.html"
-CITY_INDEX = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/5485285/index.html"
-BASE_URL = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"
-BASE_URL = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"
 PROVINCE_SITES = [
-    {"province": "海南省", "base_url": BASE_URL},
+    {"province": "海南省", "base_url": "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"},
     {"province": "山东省", "base_url": "https://jinan.pbc.gov.cn/jinan/120967/120985/120994/index.html"},
 ]
 
