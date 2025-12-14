@@ -10,6 +10,7 @@ app = Flask(__name__)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 }
+KEY_WORDS = ["支付宝", "财付通", "拉卡拉", "快钱", "新生", "钱宝"]
 
 PROV_INDEX = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/5485279/index.html"
 CITY_INDEX = "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/5485285/index.html"
@@ -320,6 +321,13 @@ INDEX_TMPL = """
           <option value="{{ p }}" {% if p == province_filter %}selected{% endif %}>{{ p }}</option>
         {% endfor %}
       </select>
+      <label style="margin-left:8px;">关键字：</label>
+      <select id="kwSel">
+        <option value="">全部</option>
+        {% for k in keywords %}
+          <option value="{{ k }}" {% if k == keyword_filter %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
     </div>
     <div class="filters">
       <a href="?range=month" class="{{ 'active' if range_key == 'month' else '' }}">近一月</a>
@@ -363,6 +371,7 @@ INDEX_TMPL = """
       const bar = document.getElementById('bar');
       const txt = document.getElementById('progText');
       const sel = document.getElementById('provSel');
+      const kwSel = document.getElementById('kwSel');
       btn.onclick = async () => {
         btn.disabled = true;
         txt.textContent = '';
@@ -380,7 +389,7 @@ INDEX_TMPL = """
             if (j.status === 'done' || j.status === 'error') {
               clearInterval(t);
               btn.disabled = false;
-              location.href = location.pathname + '?range={{ range_key }}' + '{{ "&province=" + province_filter if province_filter else "" }}';
+              location.href = location.pathname + '?range={{ range_key }}' + '{{ "&province=" + province_filter if province_filter else "" }}' + '{{ "&keyword=" + keyword_filter if keyword_filter else "" }}';
             }
           }, 800);
         } catch(e) {
@@ -393,6 +402,12 @@ INDEX_TMPL = """
         if (p) q.set('province', p); else q.delete('province');
         window.location.search = q.toString();
       };
+      kwSel.onchange = () => {
+        const k = kwSel.value;
+        const q = new URLSearchParams(window.location.search);
+        if (k) q.set('keyword', k); else q.delete('keyword');
+        window.location.search = q.toString();
+      };
     </script>
   </body>
 </html>
@@ -402,11 +417,13 @@ INDEX_TMPL = """
 def index():
     range_key = request.args.get("range", "all")
     province_filter = request.args.get("province", "")
-    refresh = request.args.get("refresh") == "1"
-    records = get_all_data(force=refresh)
+    keyword_filter = request.args.get("keyword", "")
+    records = CACHE.get("records") or []
     filtered = filter_by_range(list(records), range_key)
     if province_filter:
         filtered = [x for x in filtered if x.get("province") == province_filter]
+    if keyword_filter:
+        filtered = [x for x in filtered if keyword_filter in (x.get("title") or "")]
     rows = []
     for it in filtered:
         dls = [att["url"] for att in (it.get("attachments") or [])]
@@ -422,6 +439,8 @@ def index():
         rows=rows,
         range_key=range_key,
         provinces=sorted({x.get("province") for x in records}),
+        keywords=sorted({k for k in KEY_WORDS if any(k in (x.get("title") or "") for x in records)}),
+        keyword_filter=keyword_filter,
         province_filter=province_filter,
     )
 @app.route("/api/fetch_start", methods=["POST"])
@@ -443,4 +462,3 @@ def fetch_status():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
-
