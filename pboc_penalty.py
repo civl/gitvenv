@@ -17,6 +17,8 @@ PROVINCE_SITES = [
     {"province": "山东省", "base_url": "https://jinan.pbc.gov.cn/jinan/120967/120985/120994/index.html"},
     {"province": "北京市", "base_url": "https://beijing.pbc.gov.cn/beijing/132030/132052/132059/index.html"},
     {"province": "天津市", "base_url": "https://tianjin.pbc.gov.cn/fzhtianjin/113682/113700/113707/index.html"},
+    {"province": "福建省", "base_url": "https://fuzhou.pbc.gov.cn/fuzhou/126805/126823/126830/index.html"},
+    {"province": "深圳市", "base_url": "https://shenzhen.pbc.gov.cn/shenzhen/122811/122833/122840/index.html"},
 ]
 
 FILE_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".et", ".zip", ".rar")
@@ -38,20 +40,35 @@ def list_pages(base_url, max_pages=10):
     soup = BeautifulSoup(first_html, "lxml")
     inp = soup.find("input", attrs={"name": "article_paging_list_hidden"})
     total = 1
-    if inp and inp.has_attr("totalpage"):
-        try:
-            total = int(inp["totalpage"])
-        except Exception:
-            total = 1
-    candidates = soup.select("div.list_page a.pagingNormal[href]")
+    if inp:
+        for attr in ("totalpage", "totalPage", "total"):
+            if inp.has_attr(attr):
+                try:
+                    total = int(inp[attr])
+                    break
+                except Exception:
+                    pass
     pattern = None
-    if candidates:
-        last = candidates[-1]
-        href = normalize_href(base_url, last.get("href"))
-        if href:
-            m = re.search(r"(.+?)-(\d+)\.html$", href)
-            if m:
-                pattern = re.sub(r"-(\d+)\.html$", "-%d.html", href)
+    max_num = 1
+    candidates = soup.select("div.list_page a[href]") or soup.find_all("a", href=True)
+    for a in candidates:
+        href = normalize_href(base_url, a.get("href"))
+        if not href:
+            continue
+        m1 = re.search(r"(.+?)-(\d+)\.html$", href)
+        m2 = re.search(r"(.*?/index)_(\d+)\.html$", href)
+        if m1:
+            num = int(m1.group(2))
+            max_num = max(max_num, num)
+            pattern = re.sub(r"-(\d+)\.html$", "-%d.html", href)
+        elif m2:
+            num = int(m2.group(2))
+            max_num = max(max_num, num)
+            pattern = re.sub(r"_(\d+)\.html$", "_%d.html", href)
+    if not pattern and base_url.endswith("index.html"):
+        pattern = base_url.replace("index.html", "index_%d.html")
+    if total <= 1 and max_num > 1:
+        total = max_num
     if pattern and total > 1:
         limit = min(total, max_pages)
         for i in range(2, limit + 1):
@@ -213,7 +230,7 @@ def get_all_data(force=False):
                 if not html:
                     continue
                 soup = BeautifulSoup(html, "lxml")
-                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page) or ("shenzhen.pbc.gov.cn" in page):
                     right = soup.find("td", id="content_right")
                     if right:
                         seen_hrefs = set()
@@ -241,7 +258,7 @@ def get_all_data(force=False):
                             if link_td_index >= 0 and link_td_index + 1 < len(tds):
                                 date_text = tds[link_td_index + 1].get_text(strip=True)
                             if href and name and (href not in seen_hrefs):
-                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                 records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                 seen_hrefs.add(href)
                         uls = right.find_all("ul")
@@ -260,7 +277,7 @@ def get_all_data(force=False):
                                     m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
                                     if m:
                                         date_text = m.group(0)
-                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                 records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                 seen_hrefs.add(href)
                 else:
@@ -303,7 +320,7 @@ def _async_fetch_all():
                 html = fetch(page)
                 if html:
                     soup = BeautifulSoup(html, "lxml")
-                    if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                    if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page) or ("shenzhen.pbc.gov.cn" in page):
                         right = soup.find("td", id="content_right")
                         if right:
                             seen_hrefs = set()
@@ -331,7 +348,7 @@ def _async_fetch_all():
                                 if link_td_index >= 0 and link_td_index + 1 < len(tds):
                                     date_text = tds[link_td_index + 1].get_text(strip=True)
                                 if href and name and (href not in seen_hrefs):
-                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                     records.append({"province": prov, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                     seen_hrefs.add(href)
                             uls = right.find_all("ul")
@@ -350,7 +367,7 @@ def _async_fetch_all():
                                         m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
                                         if m:
                                             date_text = m.group(0)
-                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                    branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                     records.append({"province": prov, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                     seen_hrefs.add(href)
                     else:
@@ -402,7 +419,7 @@ def _async_fetch_one(province):
             html = fetch(page)
             if html:
                 soup = BeautifulSoup(html, "lxml")
-                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page):
+                if ("beijing.pbc.gov.cn" in page) or ("tianjin.pbc.gov.cn" in page) or ("shenzhen.pbc.gov.cn" in page):
                     right = soup.find("td", id="content_right")
                     if right:
                         seen_hrefs = set()
@@ -430,7 +447,7 @@ def _async_fetch_one(province):
                             if link_td_index >= 0 and (link_td_index + 1) < len(tds):
                                 date_text = tds[link_td_index + 1].get_text(strip=True)
                             if href and name and (href not in seen_hrefs):
-                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                 new_records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                 seen_hrefs.add(href)
                         uls = right.find_all("ul")
@@ -449,7 +466,7 @@ def _async_fetch_one(province):
                                     m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
                                     if m:
                                         date_text = m.group(0)
-                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else "天津市分行"
+                                branch_label = "北京市分行" if ("beijing.pbc.gov.cn" in page) else ("天津市分行" if ("tianjin.pbc.gov.cn" in page) else "深圳市分行")
                                 new_records.append({"province": province, "branch": branch_label, "title": name, "url": href, "date": date_text})
                                 seen_hrefs.add(href)
                 else:
@@ -553,7 +570,7 @@ INDEX_TMPL = """
             <th>分行名称</th>
             <th>处罚文件名称</th>
             <th>发布日期</th>
-            <th>下载</th>
+            <th>附件</th>
           </tr>
         </thead>
         <tbody>
