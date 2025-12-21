@@ -4,6 +4,7 @@ from urllib.parse import urljoin, urlparse
 from flask import Flask, request, render_template_string
 import requests
 from bs4 import BeautifulSoup
+import concurrent.futures
 
 app = Flask(__name__)
 
@@ -35,6 +36,7 @@ PROVINCE_SITES = [
     {"province": "湖南省", "base_url": "https://changsha.pbc.gov.cn/changsha/130011/130029/130036/index.html"},
     {"province": "海南省", "base_url": "https://haikou.pbc.gov.cn/haikou/132982/133000/133007/index.html"},    
     {"province": "江苏省", "base_url": "https://nanjing.pbc.gov.cn/nanjing/117542/117560/117567/index.html"},     
+    {"province": "江西省", "base_url": "https://nanchang.pbc.gov.cn/nanchang/132372/132390/132397/index.html"},
     {"province": "浙江省", "base_url": "https://hangzhou.pbc.gov.cn/hangzhou/125268/125286/125293/index.html"},    
     {"province": "广东省", "base_url": "https://guangzhou.pbc.gov.cn/guangzhou/129142/129159/129166/index.html"},
     {"province": "福建省", "base_url": "https://fuzhou.pbc.gov.cn/fuzhou/126805/126823/126830/index.html"},
@@ -43,7 +45,7 @@ PROVINCE_SITES = [
     {"province": "四川省", "base_url": "https://chengdu.pbc.gov.cn/chengdu/129320/129341/129350/index.html"},
     {"province": "云南省", "base_url": "https://kunming.pbc.gov.cn/kunming/133736/133760/133767/index.html"},
     {"province": "西藏自治区", "base_url": "https://lasa.pbc.gov.cn/lasa/120480/120504/120511/index.html"},
-    {"province": "陕西省", "base_url": "https://xian.pbc.gov.cn/xian/129428/129449/129412/index.html"},
+    {"province": "陕西省", "base_url": "https://xian.pbc.gov.cn/xian/129428/129449/129458/index.html"},
     {"province": "甘肃省", "base_url": "https://lanzhou.pbc.gov.cn/lanzhou/117067/117091/117057/index.html"},
     {"province": "青海省", "base_url": "https://xining.pbc.gov.cn/xining/118239/118263/118270/index.html"},
     {"province": "宁夏回族自治区", "base_url": "https://yinchuan.pbc.gov.cn/yinchuan/119983/120001/120008/index.html"},
@@ -54,12 +56,24 @@ FILE_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".et", ".zip", ".rar")
 CACHE = {"prov": None, "city": None, "records": None}
 PROGRESS = {"status": "idle", "current": 0, "total": 0, "message": ""}
 
+# Configure a global session for connection pooling
+SESSION = requests.Session()
+# Enable retries and connection pooling
+adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=3)
+SESSION.mount('http://', adapter)
+SESSION.mount('https://', adapter)
+
 def fetch(url):
-    r = requests.get(url, headers=HEADERS, timeout=15)
-    if r.status_code != 200:
+    try:
+        # Use session for connection reuse and set a reasonable timeout (5s)
+        # timeout is a deadline, not a delay; too short causes failures
+        r = SESSION.get(url, headers=HEADERS, timeout=5)
+        if r.status_code != 200:
+            return None
+        r.encoding = r.apparent_encoding or "utf-8"
+        return r.text
+    except Exception:
         return None
-    r.encoding = r.apparent_encoding or "utf-8"
-    return r.text
 
 def list_pages(base_url, max_pages=10):
     pages = {base_url}
@@ -85,7 +99,12 @@ def list_pages(base_url, max_pages=10):
             continue
             
         # Scope search to the container of this input
-        container = inp.find_parent("div", attrs={"opentype": "page"}) or inp.find_parent("div", class_="portlet")
+        container = inp.find_parent(attrs={"opentype": "page"}) or inp.find_parent(class_="portlet")
+        if not container:
+            # Also try to find parent with class "portlet" if it's not a div (e.g. table)
+            # The above find_parent(class_="portlet") should cover it regardless of tag
+            pass
+            
         if not container:
             continue
             
@@ -113,6 +132,15 @@ def list_pages(base_url, max_pages=10):
             limit = min(total, max_pages)
             for i in range(2, limit + 1):
                 pages.add(pattern % i)
+        elif inp.has_attr("moduleid") and total > 1:
+            # Fallback: Construct pattern from moduleid if no links found
+            # e.g. moduleid="10983" -> 10983-2.html
+            module_id = inp["moduleid"]
+            pattern = urljoin(base_url, f"{module_id}-%d.html")
+            limit = min(total, max_pages)
+            for i in range(2, limit + 1):
+                pages.add(pattern % i)
+            found_any_pattern = True
 
     # 2. Fallback: If no portlet-specific patterns found, try global search
     # This handles pages that don't use the multi-portlet hidden input structure
@@ -173,58 +201,178 @@ def normalize_href(base, href):
     u = urljoin(base, href)
     return u
 
-def collect_detail_links(base_url):
-    items = []
-    seen = set()
-    parent_dir = base_url.rsplit("/", 1)[0]
-    for page in list_pages(base_url, max_pages=10):
-        html = fetch(page)
-        if not html:
-            continue
-        soup = BeautifulSoup(html, "lxml")
-        ban_titles = {"法律声明", "联系我们", "设为首页", "加入收藏"}
-        container_lists = soup.select('div.txtbox_2.portlet[opentype="page"] ul.txtlist')
-        if not container_lists:
-            container_lists = soup.find_all("ul", class_="txtlist")
-        for ul in container_lists:
-            for li in ul.find_all("li"):
-                a = li.find("a", href=True)
-                if not a:
-                    continue
-                title = a.get("title") or a.get_text(strip=True)
-                if title in ban_titles:
-                    continue
-                href = normalize_href(page, a.get("href"))
-                if not href:
-                    continue
-                p = urlparse(href).path
-                if "/haikou/132982/133000/133007/" not in p or not p.endswith("/index.html"):
-                    continue
-                ds = li.find("span", class_="date")
-                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-                if href not in seen:
-                    seen.add(href)
-                    items.append({"title": title, "url": href, "date": date_text})
-    return items
+SPECIAL_PROVINCES = {
+    "北京市", "天津市", "上海市", "宁波市",
+    "深圳市", "大连市", "青岛市", "厦门市"
+}
 
 def parse_standard_branch_page(soup, page_url, province_name):
+    """
+    解析标准格式的页面 (如海南省)
+    """
     items = []
-    containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
-    for cont in containers:
-        title_span = cont.find("span", class_="portlettitle2")
+    # 查找所有 portlet (可能包含省级分行和辖内分支机构)
+    portlets = soup.select('div.txtbox_2.portlet[opentype="page"]')
+    
+    if not portlets:
+        # 尝试查找单一列表结构
+        portlets = soup.select('div.txtbox_2.portlet')
+
+    for portlet in portlets:
+        # 尝试从标题判断分行名称
+        title_span = portlet.find("span", class_="portlettitle2")
         title_text = title_span.get_text(strip=True) if title_span else ""
-        branch = "省分行" if ("省分行" in title_text) else ("辖内市分行" if ("市分行" in title_text or "辖内市分行" in title_text) else "省分行")
-        uls = cont.select("ul.txtlist")
-        for ul in uls:
-            for li in ul.find_all("li"):
-                a = li.find("a", href=True)
-                if not a:
-                    continue
-                name = a.get("title") or a.get_text(strip=True)
-                href = normalize_href(page_url, a.get("href"))
-                ds = li.find("span", class_="date")
-                date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-                items.append({"province": province_name, "branch": branch, "title": name, "url": href, "date": date_text})
+        
+        branch_name = province_name + "分行" # 默认
+        if "辖内" in title_text or "分支机构" in title_text:
+             branch_name = "辖内分支机构"
+        elif "省分行" in title_text or province_name in title_text:
+             branch_name = province_name + "分行"
+
+        # 查找列表项
+        lis = portlet.select("ul.txtlist li")
+        if not lis:
+             # 有些页面可能直接是 ul
+             lis = portlet.select("ul li")
+             
+        for li in lis:
+            a = li.find("a", href=True)
+            if not a:
+                continue
+            
+            title = (a.get("title") or a.get_text(strip=True)).strip()
+            href = normalize_href(page_url, a.get("href"))
+            
+            ds = li.find("span", class_="date")
+            date_text = ds.get_text(strip=True) if ds else ""
+            
+            items.append({
+                "province": province_name,
+                "branch": branch_name,
+                "title": title,
+                "url": href,
+                "date": date_text
+            })
+    return items
+
+def parse_special_branch_page(soup, page_url, province_name):
+    """
+    解析特殊格式的页面 (如北京市、深圳市、上海市)
+    逻辑参考 model1.py，适配表格和列表两种结构
+    """
+    items = []
+    # 北京/深圳/上海 等通常在 content_right 下
+    container = soup.find("td", id="content_right")
+    if not container:
+        return items
+    
+    branch_name = province_name + "分行"
+    seen_hrefs = set()
+    
+    # 1. Tables
+    tables = container.find_all("table", attrs={"width": "90%"})
+    header_found = False
+    
+    for tbl in tables:
+        ths = [td.get_text(strip=True) for td in tbl.find_all("td")]
+        # 只有当明确发现是表头时，才标记，并跳过这一行(table)
+        if ("公开信息名称" in ths) and ("生成日期" in ths):
+            header_found = True
+            continue
+            
+        # 如果还没找到表头，先跳过（防止误读前面的无关表格）
+        # 除非该省份不需要表头验证（但上海需要）
+        if not header_found and province_name == "上海市":
+            continue
+            
+        a = tbl.find("a", href=True)
+        if not a:
+            continue
+            
+        title = (a.get("title") or a.get_text(strip=True)).strip()
+        href = normalize_href(page_url, a.get("href"))
+        
+        # 尝试找日期
+        tds = tbl.find_all("td")
+        date_text = ""
+        # 找到包含链接的 td 的索引，日期通常在它后面
+        link_td_index = -1
+        for i, td in enumerate(tds):
+            if td.find("a", href=True):
+                link_td_index = i
+                break
+        if link_td_index >= 0 and link_td_index + 1 < len(tds):
+            date_text = tds[link_td_index + 1].get_text(strip=True)
+            
+        if href and title and (href not in seen_hrefs):
+            items.append({
+                "province": province_name,
+                "branch": branch_name,
+                "title": title,
+                "url": href,
+                "date": date_text
+            })
+            seen_hrefs.add(href)
+            
+    # 2. Lists (ul > li)
+    # 即使 table 解析了，也尝试解析 ul (互补)
+    uls = container.find_all("ul")
+    if not uls:
+        # 有些页面 ul 直接在 td 下
+        uls = container.select("ul")
+        
+    for ul in uls:
+        for li in ul.find_all("li"):
+            a = li.find("a", href=True)
+            if not a: continue
+            
+            title = (a.get("title") or a.get_text(strip=True)).strip()
+            href = normalize_href(page_url, a.get("href"))
+            
+            if not href or href in seen_hrefs:
+                continue
+                
+            ds = li.find("span", class_="date")
+            date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
+            
+            if not date_text:
+                # 尝试从文本匹配日期
+                m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
+                if m:
+                    date_text = m.group(0)
+            
+            items.append({
+                "province": province_name,
+                "branch": branch_name,
+                "title": title,
+                "url": href,
+                "date": date_text
+            })
+            seen_hrefs.add(href)
+
+    # 3. Fallback to TRs if no items found yet and not Shanghai (standard Beijing style)
+    if not items and province_name != "上海市":
+        trs = container.find_all("tr")
+        for tr in trs:
+            a = tr.find("a", href=True)
+            if not a: continue
+            title = (a.get("title") or a.get_text(strip=True)).strip()
+            href = normalize_href(page_url, a.get("href"))
+            if not href or href in seen_hrefs: continue
+            
+            text = tr.get_text(strip=True)
+            date_match = re.search(r'\d{4}-\d{2}-\d{2}', text)
+            date_text = date_match.group(0) if date_match else ""
+            
+            items.append({
+                "province": province_name,
+                "branch": branch_name,
+                "title": title,
+                "url": href,
+                "date": date_text
+            })
+            seen_hrefs.add(href)
+        
     return items
 
 def parse_page_items(soup, page_url, province_name):
@@ -293,123 +441,6 @@ def filter_by_range(items, range_key):
         if d and d >= start:
             res.append(it)
     return res
-def infer_branch(title, source):
-    m = re.search(r"(?:中国人民银行)?(.+?分行)", title or "")
-    if m:
-        return m.group(1)
-    if source == "prov":
-        return "海南省分行"
-    return "辖内市分行"
-def _title_to_branch(portlet_title):
-    s = (portlet_title or "").strip()
-    if "省分行" in s:
-        return "省分行"
-    if "市分行" in s or "辖内市分行" in s:
-        return "辖内市分行"
-    return "海南省分行"
-def collect_from_base(base_url):
-    html = fetch(base_url)
-    if not html:
-        return [], [], "海南省分行", "辖内市分行"
-    soup = BeautifulSoup(html, "lxml")
-    prov_items, city_items = [], []
-    prov_branch, city_branch = "海南省分行", "辖内市分行"
-    containers = soup.select('div.txtbox_2.portlet[opentype="page"]')
-    for cont in containers:
-        title_span = cont.find("span", class_="portlettitle2")
-        title_text = title_span.get_text(strip=True) if title_span else ""
-        branch = _title_to_branch(title_text)
-        more = None
-        for a in cont.find_all("a", href=True):
-            if a.get_text(strip=True) == "更多" or re.search(r"更多", a.get_text(strip=True)):
-                more = normalize_href(base_url, a.get("href"))
-                break
-        if more:
-            items = collect_detail_links(more)
-        else:
-            items = []
-            uls = cont.select("ul.txtlist")
-            for ul in uls:
-                for li in ul.find_all("li"):
-                    a = li.find("a", href=True)
-                    if not a:
-                        continue
-                    href = normalize_href(base_url, a.get("href"))
-                    title = a.get("title") or a.get_text(strip=True)
-                    ds = li.find("span", class_="date")
-                    date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-                    if href and title:
-                        items.append({"title": title, "url": href, "date": date_text})
-        if branch == "省分行":
-            prov_branch = branch
-            prov_items.extend(items)
-        else:
-            city_branch = branch
-            city_items.extend(items)
-    return prov_items, city_items, prov_branch, city_branch
-SPECIAL_PROVINCES = {
-    "北京市", "天津市", "上海市", "宁波市",
-    "深圳市", "大连市", "青岛市", "厦门市"
-}
-
-def parse_special_branch_page(soup, page_url, province_name):
-    items = []
-    right = soup.find("td", id="content_right")
-    if not right:
-        return items
-    
-    seen_hrefs = set()
-    branch_label = province_name + "分行"
-    
-    # 1. Tables
-    tables = right.find_all("table", attrs={"width": "90%"})
-    header_found = False
-    for tbl in tables:
-        ths = [td.get_text(strip=True) for td in tbl.find_all("td")]
-        if ("公开信息名称" in ths) and ("生成日期" in ths):
-            header_found = True
-            continue
-        if not header_found:
-            continue
-        a = tbl.find("a", href=True)
-        if not a:
-            continue
-        name = a.get("title") or a.get_text(strip=True)
-        href = normalize_href(page_url, a.get("href"))
-        tds = tbl.find_all("td")
-        date_text = ""
-        link_td_index = -1
-        for i, td in enumerate(tds):
-            if td.find("a", href=True):
-                link_td_index = i
-                break
-        if link_td_index >= 0 and link_td_index + 1 < len(tds):
-            date_text = tds[link_td_index + 1].get_text(strip=True)
-        if href and name and (href not in seen_hrefs):
-            items.append({"province": province_name, "branch": branch_label, "title": name, "url": href, "date": date_text})
-            seen_hrefs.add(href)
-            
-    # 2. Lists (ul)
-    uls = right.find_all("ul")
-    for ul in uls:
-        for li in ul.find_all("li"):
-            a = li.find("a", href=True)
-            if not a:
-                continue
-            name = a.get("title") or a.get_text(strip=True)
-            href = normalize_href(page_url, a.get("href"))
-            if not href or href in seen_hrefs:
-                continue
-            ds = li.find("span", class_="date")
-            date_text = (ds.get_text(strip=True) if ds else "") if ds else ""
-            if not date_text:
-                m = re.search(r"\d{4}-\d{2}-\d{2}", li.get_text(" ", strip=True))
-                if m:
-                    date_text = m.group(0)
-            items.append({"province": province_name, "branch": branch_label, "title": name, "url": href, "date": date_text})
-            seen_hrefs.add(href)
-            
-    return items
 
 def get_all_data(force=False):
     if force or CACHE["records"] is None:
@@ -430,35 +461,55 @@ def get_all_data(force=False):
             it["attachments"] = collect_attachments(it["url"])
         CACHE["records"] = sort_records(records)
     return CACHE["records"]
+def process_single_page(page, prov):
+    html = fetch(page)
+    if html:
+        soup = BeautifulSoup(html, "lxml")
+        return parse_page_items(soup, page, prov)
+    return []
+
 def _async_fetch_all():
     try:
         PROGRESS["status"] = "running"
         pages_map = []
-        total = 0
+        total_pages = 0
         for site in PROVINCE_SITES:
             pages = list_pages(site["base_url"], max_pages=50)
             pages_map.append({"province": site["province"], "pages": pages})
-            total += len(pages)
-        PROGRESS["total"] = total
+            total_pages += len(pages)
+        
+        PROGRESS["total"] = total_pages
         PROGRESS["current"] = 0
         records = []
-        for entry in pages_map:
-            prov = entry["province"]
-            for page in entry["pages"]:
-                html = fetch(page)
-                if html:
-                    soup = BeautifulSoup(html, "lxml")
-                    items = parse_page_items(soup, page, prov)
+        
+        # Use ThreadPoolExecutor for concurrent page fetching
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_info = {}
+            for entry in pages_map:
+                prov = entry["province"]
+                for page in entry["pages"]:
+                    future = executor.submit(process_single_page, page, prov)
+                    future_to_info[future] = page
+            
+            for future in concurrent.futures.as_completed(future_to_info):
+                try:
+                    items = future.result()
                     records.extend(items)
-
-                PROGRESS["current"] += 1
+                except Exception as e:
+                    print(f"Error processing {future_to_info[future]}: {e}")
+                finally:
+                    PROGRESS["current"] += 1
         
         records = deduplicate_records(records)
         PROGRESS["message"] = "解析完成，开始获取附件"
         PROGRESS["total"] = PROGRESS["current"] + len(records)
+        
+        # We can also parallelize attachment collection if needed, but keeping it simple for now
+        # or we can use the same pattern if attachment fetching is slow
         for it in records:
             it["attachments"] = collect_attachments(it["url"])
             PROGRESS["current"] += 1
+            
         CACHE["records"] = sort_records(records)
         PROGRESS["status"] = "done"
         PROGRESS["message"] = "完成"
@@ -481,14 +532,17 @@ def _async_fetch_one(province):
         PROGRESS["total"] = len(pages)
         PROGRESS["current"] = 0
         new_records = []
-        for page in pages:
-            html = fetch(page)
-            if html:
-                soup = BeautifulSoup(html, "lxml")
-                items = parse_page_items(soup, page, province)
-                new_records.extend(items)
-
-            PROGRESS["current"] += 1
+        # Use ThreadPoolExecutor for concurrent page fetching
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_url = {executor.submit(process_single_page, page, province): page for page in pages}
+            for future in concurrent.futures.as_completed(future_to_url):
+                try:
+                    items = future.result()
+                    new_records.extend(items)
+                except Exception as e:
+                    print(f"Error processing {future_to_url[future]}: {e}")
+                finally:
+                    PROGRESS["current"] += 1
         
         new_records = deduplicate_records(new_records)
         PROGRESS["message"] = "解析完成，开始获取附件"
