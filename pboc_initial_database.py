@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 # 模块加载时自动加载环境变量
 env_path = r'D:\code\.venv\.env'
+env_path = r'/Users/zhouwei/Code/venv3.14/.env'
 if os.path.exists(env_path):
     load_dotenv(env_path)
 else:
