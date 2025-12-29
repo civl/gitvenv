@@ -177,17 +177,19 @@ def scrape_page(url):
             
     return data
 
-def scrape_and_save(base_url):
+def scrape_and_save(base_url, max_workers=3, progress_callback=None):
     """
     主抓取逻辑：遍历所有分页，抓取并汇总数据
     :param base_url: 包含分页占位符 {} 的基础 URL
+    :param max_workers: 线程数
+    :param progress_callback: 进度回调函数 func(current, total, total_items)
     :return: 所有抓取到的数据列表
     """
     all_data = []
     total_pages = get_total_pages(base_url.format(1))
-    print(f"开始抓取，总页数: {total_pages}，使用3个线程并行抓取")
+    print(f"开始抓取，总页数: {total_pages}，使用{max_workers}个线程并行抓取")
     
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_page = {executor.submit(scrape_page, base_url.format(i)): i for i in range(1, total_pages + 1)}
         
         completed_count = 0
@@ -199,6 +201,8 @@ def scrape_and_save(base_url):
                 completed_count += 1
                 # 实时打印进度日志
                 print(f"进度: 已完成 {completed_count}/{total_pages} 页 | 本页抓取: {len(page_data)} 条 | 累计抓取: {len(all_data)} 条")
+                if progress_callback:
+                    progress_callback(completed_count, total_pages, len(all_data))
             except Exception as e:
                 print(f"第 {page_num} 页抓取失败: {e}")
                 
@@ -326,16 +330,34 @@ def insert_data_to_mysql(connection, table_name, data, columns):
 # ==========================================
 # 5. 主程序入口
 # ==========================================
-if __name__ == "__main__":
+def run_task(db_config=None, max_workers=3, progress_callback=None):
+    """
+    运行整个抓取任务
+    :param db_config: 数据库配置字典 {'host':, 'port':, 'user':, 'password':, 'schema':}
+    :param max_workers: 线程数
+    :param progress_callback: 进度回调 func(phase, current, total, total_items)
+    """
+    if db_config is None:
+        # Default to global vars
+        db_config = {
+            'host': db_host,
+            'port': int(db_port) if db_port else 3306,
+            'user': db_user,
+            'password': db_password,
+            'schema': db_schema,
+            'charset': db_charset
+        }
+    
+    connection = None
     try:
         # 建立数据库连接
         connection = pymysql.connect(
-            host=db_host,
-            port=int(db_port),
-            user=db_user,
-            password=db_password,
-            database=db_schema,
-            charset=db_charset,
+            host=db_config['host'],
+            port=int(db_config['port']),
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['schema'],
+            charset=db_config.get('charset', 'utf8mb4'),
             cursorclass=pymysql.cursors.DictCursor
         )
 
@@ -353,13 +375,21 @@ if __name__ == "__main__":
             "业务类型", "业务覆盖范围", "换证日期", "首次许可日期", "发证日期", "有效期至", "备注"
         ]
 
+        results = {}
+
         # ---------------------------------------------------------
         # 任务一：抓取“已获许可机构”数据
         # ---------------------------------------------------------
         start_time = time.time()
         base_url1 = "https://www.pbc.gov.cn/zhengwugongkai/4081330/4081344/4081407/4081702/4081749/4081783/9398ddc0-{}.html"
-        registered_data = scrape_and_save(base_url1)
+        
+        def task1_callback(current, total, items):
+            if progress_callback:
+                progress_callback("registered", current, total, items)
+                
+        registered_data = scrape_and_save(base_url1, max_workers=max_workers, progress_callback=task1_callback)
         log_time_taken(start_time, "抓取“已获许可机构（支付机构）”数据")
+        results['registered'] = registered_data
         
         start_time = time.time()
         insert_data_to_mysql(connection, "pbc_inst_registered", registered_data, cols_registered)
@@ -370,8 +400,14 @@ if __name__ == "__main__":
         # ---------------------------------------------------------
         start_time = time.time()
         base_url2 = "https://www.pbc.gov.cn/zhengwugongkai/4081330/4081344/4081407/4081702/4081749/4081786/63ead9a6-{}.html"
-        unregistered_data = scrape_and_save(base_url2)
+        
+        def task2_callback(current, total, items):
+            if progress_callback:
+                progress_callback("unregistered", current, total, items)
+
+        unregistered_data = scrape_and_save(base_url2, max_workers=max_workers, progress_callback=task2_callback)
         log_time_taken(start_time, "抓取“已注销许可机构”数据")
+        results['unregistered'] = unregistered_data
         
         start_time = time.time()
         insert_data_to_mysql(connection, "pbc_inst_unregistered", unregistered_data, cols_unregistered)
@@ -382,15 +418,31 @@ if __name__ == "__main__":
         # ---------------------------------------------------------
         start_time = time.time()
         directory_url = "https://www.pbc.gov.cn/zhengwugongkai/4081330/4081344/4081407/4081702/4081749/4693227/index.html"
+        # 这里的进度可能不好量化，或者只是简单的开始/结束
+        if progress_callback:
+            progress_callback("important_news_start", 0, 1, 0)
+            
         important_news_data = scrape_important_news(directory_url, "非银行支付机构重大事项变更许可信息公示")
         log_time_taken(start_time, "抓取“重大事项变更”数据")
+        results['important_news'] = important_news_data
 
         start_time = time.time()
         insert_important_news_to_mysql(connection, important_news_data)
         log_time_taken(start_time, "写入“重大事项变更”数据到数据库")
+        
+        if progress_callback:
+            progress_callback("done", 100, 100, 0)
+            
+        return results
 
     except Exception as e:
         print(f"程序运行出错: {e}")
+        if progress_callback:
+             progress_callback("error", 0, 0, str(e))
+        raise e
     finally:
-        if 'connection' in locals() and connection.open:
+        if connection and connection.open:
             connection.close()
+
+if __name__ == "__main__":
+    run_task()
