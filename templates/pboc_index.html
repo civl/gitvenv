@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBOC Penalty Downloader</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, input[type="text"], button { padding: 8px; width: 100%; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #0056b3; }
+        #log-container { margin-top: 20px; background: #f5f5f5; border: 1px solid #ccc; height: 400px; overflow-y: scroll; padding: 10px; font-family: monospace; font-size: 12px; }
+        .log-entry { margin: 2px 0; border-bottom: 1px solid #eee; }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: #333; }
+        .progress-bar { width: 100%; background-color: #e0e0e0; height: 20px; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+        .progress-fill { height: 100%; background-color: #28a745; width: 0%; transition: width 0.3s ease; text-align: center; color: white; line-height: 20px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>PBOC Administrative Penalty Downloader</h1>
+    
+    <div class="container">
+        <div class="form-group">
+            <label for="province">Select Province:</label>
+            <select id="province">
+                <option value="上海">上海 (Shanghai)</option>
+                <option value="北京">北京 (Beijing)</option>
+                <option value="广东">广东 (Guangdong)</option>
+                <option value="江苏">江苏 (Jiangsu)</option>
+                <option value="浙江">浙江 (Zhejiang)</option>
+                <!-- Add more as needed, or fetch from DB -->
+            </select>
+        </div>
+        
+        <button id="start-btn" onclick="startDownload()">Start Download</button>
+        
+        <div style="margin-top: 20px;">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill">0%</div>
+            </div>
+            <div id="status-text">Ready</div>
+        </div>
+        
+        <div id="log-container"></div>
+    </div>
+
+    <script>
+        let eventSource;
+
+        function startDownload() {
+            const province = document.getElementById('province').value;
+            const btn = document.getElementById('start-btn');
+            const logContainer = document.getElementById('log-container');
+            
+            btn.disabled = true;
+            btn.innerText = "Running...";
+            logContainer.innerHTML = '';
+            
+            // Start the process via fetch
+            fetch('/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ province: province })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'started') {
+                    connectEventSource();
+                } else {
+                    alert('Failed to start: ' + data.message);
+                    btn.disabled = false;
+                    btn.innerText = "Start Download";
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error starting download');
+                btn.disabled = false;
+                btn.innerText = "Start Download";
+            });
+        }
+
+        function connectEventSource() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource('/stream');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'log') {
+                    const div = document.createElement('div');
+                    div.className = 'log-entry ' + data.level;
+                    div.textContent = `[${data.time}] ${data.message}`;
+                    const logContainer = document.getElementById('log-container');
+                    logContainer.appendChild(div);
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                } else if (data.type === 'progress') {
+                    const percent = Math.round((data.current / data.total) * 100);
+                    const fill = document.getElementById('progress-fill');
+                    fill.style.width = percent + '%';
+                    fill.textContent = percent + '%';
+                    document.getElementById('status-text').textContent = `Processed: ${data.current} / ${data.total} (Success: ${data.success}, Fail: ${data.fail})`;
+                    
+                    if (data.current >= data.total && data.total > 0) {
+                        document.getElementById('start-btn').disabled = false;
+                        document.getElementById('start-btn').innerText = "Start Download";
+                        eventSource.close();
+                    }
+                } else if (data.type === 'done') {
+                    document.getElementById('start-btn').disabled = false;
+                    document.getElementById('start-btn').innerText = "Start Download";
+                    eventSource.close();
+                    const div = document.createElement('div');
+                    div.className = 'log-entry info';
+                    div.textContent = "=== Process Completed ===";
+                    document.getElementById('log-container').appendChild(div);
+                }
+            };
+            
+            eventSource.onerror = function() {
+                console.log("EventSource failed.");
+                eventSource.close();
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('start-btn').innerText = "Start Download";
+            };
+        }
+    </script>
+</body>
+</html>
