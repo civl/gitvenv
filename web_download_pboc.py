@@ -104,7 +104,7 @@ def process_download(province):
         return
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         # Select records for the province
         sql = "SELECT * FROM pboc_penalty WHERE 省份 LIKE %s"
         cursor.execute(sql, (f"%{province}%",))
@@ -138,11 +138,9 @@ def process_download(province):
                 
                 soup = BeautifulSoup(resp.text, 'html.parser')
                 
-                # Strategy 1: Look for file links
                 file_found = False
                 
-                # Extensions to look for
-                exts = ['.doc', '.docx', '.pdf', '.xls', '.xlsx', '.et']
+                exts = ['.doc', '.docx', '.pdf', '.xls', '.xlsx', '.et', '.wps']
                 
                 # Find all links
                 links = soup.find_all('a', href=True)
@@ -174,52 +172,121 @@ def process_download(province):
                         for chunk in file_resp.iter_content(chunk_size=8192):
                             f.write(chunk)
                     
-                    manager.add_log(f"Saved: {os.path.basename(final_path)}", "success")
+                    manager.add_log(f"{os.path.basename(final_path)}", "success")
                     manager.success += 1
                     file_found = True
                     
                 else:
-                    # Strategy 2: Look for table
                     manager.add_log("No file link found, looking for table...", "info")
-                    tables = soup.find_all('table')
                     
-                    # Filter out tiny layout tables if possible, but for now just take the largest or first meaningful one
-                    # The example shows a layout table (border=0), but maybe the data is inside?
-                    # Actually the example shows the file link INSIDE a table. 
-                    # If we are here, Strategy 1 failed, so no link in table.
-                    # We need to extract DATA from table.
+                    keywords = [
+                        "序号",
+                        "当事人",
+                        "当事人名称",
+                        "行政处罚",
+                        "决定书文号",
+                        "违法",
+                        "罚款",
+                        "作出行政处罚",
+                        "行政处罚决定日期",
+                        "备注"
+                    ]
                     
-                    valid_table = None
-                    # Simple heuristic: table with most text content
-                    max_len = 0
+                    best_table = None
+                    best_score = 0
                     
-                    for table in tables:
-                        txt = table.get_text(strip=True)
-                        if len(txt) > max_len:
-                            max_len = len(txt)
-                            valid_table = table
-                    
-                    if valid_table and max_len > 20: # Arbitrary threshold
+                    try:
+                        tables = soup.find_all("table")
+                        for table in tables:
+                            text = table.get_text(" ", strip=True)
+                            score = 0
+                            for kw in keywords:
+                                if kw in text:
+                                    score += 1
+                            if "中国人民银行" in text:
+                                score += 1
+                            if score > best_score:
+                                best_score = score
+                                best_table = table
+                    except Exception as e:
+                        manager.add_log(f"Table search failed: {e}", "error")
+                        best_table = None
+
+                    if best_table and best_score >= 2:
                         try:
-                            # Use pandas to parse
-                            # We need to wrap html in StringIO for pandas
-                            dfs = pd.read_html(str(valid_table))
-                            if dfs:
-                                df = dfs[0]
+                            rows_html = best_table.find_all("tr")
+                            header_idx = None
+                            header_cells = None
+                            
+                            for idx_tr, tr in enumerate(rows_html):
+                                cells = tr.find_all(["td", "th"])
+                                if not cells:
+                                    continue
+                                texts = [c.get_text(strip=True) for c in cells]
+                                row_text = "".join(texts)
+                                
+                                if ("序号" in row_text and 
+                                    ("当事人" in row_text or "当事人名称" in row_text or "单位" in row_text)):
+                                    header_idx = idx_tr
+                                    header_cells = texts
+                                    break
+                            
+                            if header_idx is None:
+                                for idx_tr, tr in enumerate(rows_html):
+                                    cells = tr.find_all(["td", "th"])
+                                    if not cells:
+                                        continue
+                                    texts = [c.get_text(strip=True) for c in cells]
+                                    if any(texts):
+                                        header_idx = idx_tr
+                                        header_cells = texts
+                                        break
+                            
+                            data_rows = []
+                            if header_idx is not None and header_cells:
+                                for tr in rows_html[header_idx + 1:]:
+                                    cells = tr.find_all(["td", "th"])
+                                    if not cells:
+                                        continue
+                                    texts = [c.get_text(strip=True) for c in cells]
+                                    if not any(texts):
+                                        continue
+                                    row_text = "".join(texts)
+                                    if "以上内容" in row_text:
+                                        break
+                                    data_rows.append(texts)
+                            
+                            if header_cells and data_rows:
+                                max_len = max(len(header_cells), max(len(r) for r in data_rows))
+                                
+                                def pad_row(row, length):
+                                    if len(row) < length:
+                                        return row + [""] * (length - len(row))
+                                    return row[:length]
+                                
+                                header_padded = pad_row(header_cells, max_len)
+                                data_padded = [pad_row(r, max_len) for r in data_rows]
+                                
+                                df = pd.DataFrame(data_padded, columns=header_padded)
+                                df = df.replace(r"^\s*$", pd.NA, regex=True)
+                                df = df.dropna(how="all")
+                                df = df.loc[:, df.columns.notnull()]
+                                df = df.loc[:, df.columns != ""]
+                                
                                 final_path = os.path.join(base_download_dir, f"{file_name_base}.xlsx")
                                 df.to_excel(final_path, index=False)
-                                manager.add_log(f"Saved table to xlsx: {os.path.basename(final_path)}", "success")
+                                manager.add_log(f"{os.path.basename(final_path)}", "success")
                                 manager.success += 1
                                 file_found = True
                         except Exception as e:
-                            manager.add_log(f"Table parsing failed: {e}", "error")
+                            manager.add_log(f"Table parsing failed for {file_name_base}: {e}", "error")
                     
                 if not file_found:
-                    manager.add_log("No document or valid table found.", "error")
+                    manager.add_log(f"No document or valid table found for {file_name_base}", "error")
                     manager.fail += 1
                     
             except Exception as e:
-                manager.add_log(f"Error processing {detail_url}: {e}", "error")
+                manager.add_log(f"Error processing {file_name_base}: {e}", "error")
                 manager.fail += 1
             
             # Polite delay
@@ -233,7 +300,22 @@ def process_download(province):
 
 @app.route('/')
 def index():
-    return render_template('pboc_index.html')
+    conn = get_db_connection()
+    provinces = []
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT 省份 FROM pboc_penalty ORDER BY 省份")
+                rows = cursor.fetchall()
+                for row in rows:
+                    value = row.get("省份")
+                    if value:
+                        provinces.append(value)
+        except Exception as e:
+            print(f"Error fetching provinces: {e}")
+        finally:
+            conn.close()
+    return render_template('pboc_index.html', provinces=provinces)
 
 @app.route('/start', methods=['POST'])
 def start():
@@ -282,7 +364,7 @@ if __name__ == '__main__':
     # Auto-open browser
     def open_browser():
         time.sleep(1)
-        os.system("open http://127.0.0.1:5001")
+        os.system("open http://127.0.0.1:5201")
         
     threading.Thread(target=open_browser).start()
     app.run(host='0.0.0.0', port=5001, debug=False)

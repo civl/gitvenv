@@ -12,7 +12,7 @@
         select, input[type="text"], button { padding: 8px; width: 100%; box-sizing: border-box; }
         button { background-color: #007bff; color: white; border: none; cursor: pointer; font-size: 16px; }
         button:hover { background-color: #0056b3; }
-        #log-container { margin-top: 20px; background: #f5f5f5; border: 1px solid #ccc; height: 400px; overflow-y: scroll; padding: 10px; font-family: monospace; font-size: 12px; }
+        #log-container { margin-top: 20px; background: #f5f5f5; border: 1px solid #ccc; height: 400px; padding: 10px; font-family: monospace; font-size: 12px; }
         .log-entry { margin: 2px 0; border-bottom: 1px solid #eee; }
         .success { color: green; }
         .error { color: red; }
@@ -28,12 +28,9 @@
         <div class="form-group">
             <label for="province">Select Province:</label>
             <select id="province">
-                <option value="上海">上海 (Shanghai)</option>
-                <option value="北京">北京 (Beijing)</option>
-                <option value="广东">广东 (Guangdong)</option>
-                <option value="江苏">江苏 (Jiangsu)</option>
-                <option value="浙江">浙江 (Zhejiang)</option>
-                <!-- Add more as needed, or fetch from DB -->
+                {% for p in provinces %}
+                    <option value="{{ p }}">{{ p }}</option>
+                {% endfor %}
             </select>
         </div>
         
@@ -45,8 +42,18 @@
             </div>
             <div id="status-text">Ready</div>
         </div>
-        
-        <div id="log-container"></div>
+        <div id="log-container">
+            <div style="display: flex; height: 100%; gap: 10px;">
+                <div style="flex: 1; overflow-y: auto;">
+                    <div class="log-entry info">下载成功文件</div>
+                    <div id="success-list"></div>
+                </div>
+                <div style="flex: 1; overflow-y: auto;">
+                    <div class="log-entry info">下载失败文件</div>
+                    <div id="fail-list"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -55,11 +62,13 @@
         function startDownload() {
             const province = document.getElementById('province').value;
             const btn = document.getElementById('start-btn');
-            const logContainer = document.getElementById('log-container');
+            const successList = document.getElementById('success-list');
+            const failList = document.getElementById('fail-list');
             
             btn.disabled = true;
             btn.innerText = "Running...";
-            logContainer.innerHTML = '';
+            successList.innerHTML = '';
+            failList.innerHTML = '';
             
             // Start the process via fetch
             fetch('/start', {
@@ -98,12 +107,21 @@
                 const data = JSON.parse(event.data);
                 
                 if (data.type === 'log') {
-                    const div = document.createElement('div');
-                    div.className = 'log-entry ' + data.level;
-                    div.textContent = `[${data.time}] ${data.message}`;
-                    const logContainer = document.getElementById('log-container');
-                    logContainer.appendChild(div);
-                    logContainer.scrollTop = logContainer.scrollHeight;
+                    if (data.level === 'success') {
+                        const item = document.createElement('div');
+                        item.className = 'log-entry success';
+                        item.textContent = data.message;
+                        const successList = document.getElementById('success-list');
+                        successList.appendChild(item);
+                        successList.scrollTop = successList.scrollHeight;
+                    } else if (data.level === 'error') {
+                        const item = document.createElement('div');
+                        item.className = 'log-entry error';
+                        item.textContent = data.message;
+                        const failList = document.getElementById('fail-list');
+                        failList.appendChild(item);
+                        failList.scrollTop = failList.scrollHeight;
+                    }
                 } else if (data.type === 'progress') {
                     const percent = Math.round((data.current / data.total) * 100);
                     const fill = document.getElementById('progress-fill');
