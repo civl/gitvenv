@@ -364,7 +364,8 @@ if __name__ == '__main__':
     # Auto-open browser
     def open_browser():
         time.sleep(1)
-        os.system("open http://127.0.0.1:5201")
+        import subprocess
+        subprocess.run(["open", "http://127.0.0.1:5201"])
         
     threading.Thread(target=open_browser).start()
     app.run(host='0.0.0.0', port=5201, debug=False)
