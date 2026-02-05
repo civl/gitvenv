@@ -2,13 +2,8 @@ import os
 import pymysql
 from dotenv import load_dotenv
 
-# 模块加载时自动加载环境变量
-env_path = r'D:\code\.venv\.env'
-env_path = r'/Users/zhouwei/Code/venv3.14/.env'
-if os.path.exists(env_path):
-    load_dotenv(env_path)
-else:
-    print(f"警告: 未找到配置文件 {env_path}")
+# 优先加载当前目录下的 .env
+load_dotenv()
 
 def get_connection(schema_name: str) -> pymysql.connections.Connection:
     """
@@ -26,14 +21,14 @@ def get_connection(schema_name: str) -> pymysql.connections.Connection:
     """
     
     # 获取通用数据库连接配置
-    host = os.getenv('url_aliyun')
-    port = os.getenv('port_aliyun')
-    user = os.getenv('user_aliyun')
-    password = os.getenv('password_aliyun')
+    host = os.getenv('db_url')
+    port = os.getenv('db_port')
+    user = os.getenv('db_user')
+    password = os.getenv('db_password')
     
     # 简单的配置检查
     if not all([host, port, user, password]):
-        raise ValueError("数据库配置缺失，请检查 .env 文件中的 url_aliyun, port_aliyun, user_aliyun, password_aliyun 配置。")
+        raise ValueError("数据库配置缺失，请检查 .env 文件中的 db_url, db_port, db_user, db_password 配置。")
 
     print(f"正在尝试连接数据库: {schema_name} @ {host}...")
 

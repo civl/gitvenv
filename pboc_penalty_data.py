@@ -44,7 +44,7 @@ PROVINCE_SITES = [
     {"province": "云南省", "base_url": "https://kunming.pbc.gov.cn/kunming/133736/133760/133767/index.html"},
     {"province": "西藏自治区", "base_url": "https://lasa.pbc.gov.cn/lasa/120480/120504/120511/index.html"},
     {"province": "陕西省", "base_url": "https://xian.pbc.gov.cn/xian/129428/129449/129458/index.html"},
-    {"province": "甘肃省", "base_url": "https://lanzhou.pbc.gov.cn/lanzhou/117067/117091/117057/index.html"},
+    {"province": "甘肃省", "base_url": "https://lanzhou.pbc.gov.cn/lanzhou/117067/117091/117098/index.html"},
     {"province": "青海省", "base_url": "https://xining.pbc.gov.cn/xining/118239/118263/118270/index.html"},
     {"province": "宁夏回族自治区", "base_url": "https://yinchuan.pbc.gov.cn/yinchuan/119983/120001/120008/index.html"},
     {"province": "新疆维吾尔自治区", "base_url": "https://wulumuqi.pbc.gov.cn/wulumuqi/121755/121777/121784/index.html"},
